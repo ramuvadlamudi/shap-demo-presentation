@@ -55,6 +55,7 @@ index=shap_demo sourcetype=cisco:combined_demo
 | eval alert_label=if(threat_score >= 0.7, "malicious", if(threat_score >= 0.4, "suspicious", "normal"))
 | table _time, host, user, process_name, port, domain, bytes_sent, bytes_received, dns_query_count, threat_score, alert_label
 | sort -threat_score
+
 - **Explanation**: Binary indicators for processes, ports, domains, data transfers, and DNS queries. Weighted `threat_score` with labels (`malicious` ≥ 0.7, `suspicious` ≥ 0.4).
 
 ### Feature Engineering in Splunk
