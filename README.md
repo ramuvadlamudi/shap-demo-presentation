@@ -109,34 +109,35 @@ Combine SHAP results with original data.
 
 
 #### Detection with SHAP
+
 index=shap_demo sourcetype=cisco:combined_demo
-| eval is_suspicious_process=if(process_name IN ("psexec.exe", "cmd.exe"), 1, 0)
-| eval is_high_risk_port=if(port IN (445, 3389), 1, 0)
-| eval is_suspicious_domain=if(domain IN ("unknown.com", "suspicious.org") OR domain="", 1, 0)
-| eval high_data_transfer=if(bytes_sent > 800 OR bytes_received > 400, 1, 0)
-| eval high_dns_query_count=if(dns_query_count > 10, 1, 0)
-| eval threat_score = (is_suspicious_process * 0.3) + (is_high_risk_port * 0.25) + (is_suspicious_domain * 0.25) + (high_data_transfer * 0.15) + (high_dns_query_count * 0.05)
-| join type=left _time, host, user
-[ inputlookup shap_values.csv
-| fields _time, host, user, shap_is_suspicious_process, shap_is_high_risk_port, shap_is_suspicious_domain, shap_high_data_transfer, shap_high_dns_query_count, shap_connection_duration_norm, shap_bytes_sent_norm, shap_bytes_received_norm ]
-| eval total_shap = shap_is_suspicious_process + shap_high_risk_port + shap_is_suspicious_domain + shap_high_data_transfer + shap_high_dns_query_count + shap_connection_duration_norm + shap_bytes_sent_norm + shap_bytes_received_norm
-| eval confidence = round(total_shap * 100, 0) . "%"
-| eval top_risk_factors = case(
-shap_is_suspicious_domain >= 0.3, "Unknown Domain Communication: +" . round(shap_is_suspicious_domain, 2) . " (CRITICAL)",
-shap_is_suspicious_process >= 0.3, "Suspicious Process Execution: +" . round(shap_is_suspicious_process, 2) . " (SUSPICIOUS)",
-shap_high_risk_port >= 0.3, "High-Risk Port Activity: +" . round(shap_high_risk_port, 2) . " (ANOMALOUS)",
-shap_high_data_transfer >= 0.2, "Elevated Data Transfer: +" . round(shap_high_data_transfer, 2) . " (MALICIOUS)",
-shap_high_dns_query_count >= 0.1, "Abnormal Query Patterns: +" . round(shap_high_dns_query_count, 2) . " (ELEVATED)",
-1=1, ""
-)
-| eval investigation_priority = if(threat_score >= 0.85, "#1 - Critical Lateral Movement", if(threat_score >= 0.7, "#2 - RDP Compromise Vector", "#3 - Low Priority"))
-| eval next_steps = case(
-host="host1", "Isolate host1, analyze psexec.exe payload, investigate unknown.com domain, check SMB/port 445 connections",
-host="host2", "Check RDP sessions on port 3389, investigate suspicious.org domain, analyze cmd.exe activity, review user2 privilege escalation",
-1=1, "Review host activity and network connections"
-)
-| table _time, host, user, threat_score, confidence, top_risk_factors, investigation_priority, next_steps
-| sort -threat_score
+   | eval is_suspicious_process=if(process_name IN ("psexec.exe", "cmd.exe"), 1, 0)
+   | eval is_high_risk_port=if(port IN (445, 3389), 1, 0)
+   | eval is_suspicious_domain=if(domain IN ("unknown.com", "suspicious.org") OR domain="", 1, 0)
+   | eval high_data_transfer=if(bytes_sent > 800 OR bytes_received > 400, 1, 0)
+   | eval high_dns_query_count=if(dns_query_count > 10, 1, 0)
+   | eval threat_score = (is_suspicious_process * 0.3) + (is_high_risk_port * 0.25) + (is_suspicious_domain * 0.25) + (high_data_transfer * 0.15) + (high_dns_query_count * 0.05)
+   | join type=left _time, host, user
+       [ inputlookup shap_values.csv
+         | fields _time, host, user, shap_suspicious_process, shap_high_risk_port, shap_suspicious_domain, shap_high_data_transfer, shap_high_dns_query_count, shap_connection_duration, shap_bytes_sent, shap_bytes_received ]
+   | eval total_shap = shap_suspicious_process + shap_high_risk_port + shap_suspicious_domain + shap_high_data_transfer + shap_high_dns_query_count + shap_connection_duration + shap_bytes_sent + shap_bytes_received
+   | eval confidence = round(total_shap * 100, 0) . "%"
+   | eval top_risk_factors = case(
+       shap_suspicious_domain >= 0.3, "Unknown Domain Communication: +" . round(shap_suspicious_domain, 2) . " (CRITICAL)",
+       shap_suspicious_process >= 0.3, "Suspicious Process Execution: +" . round(shap_suspicious_process, 2) . " (SUSPICIOUS)",
+       shap_high_risk_port >= 0.3, "High-Risk Port Activity: +" . round(shap_high_risk_port, 2) . " (ANOMALOUS)",
+       shap_high_data_transfer >= 0.2, "Elevated Data Transfer: +" . round(shap_high_data_transfer, 2) . " (MALICIOUS)",
+       shap_high_dns_query_count >= 0.1, "Abnormal Query Patterns: +" . round(shap_high_dns_query_count, 2) . " (ELEVATED)",
+       1=1, ""
+   )
+   | eval investigation_priority = if(threat_score >= 0.85, "#1 - Critical Lateral Movement", if(threat_score >= 0.7, "#2 - RDP Compromise Vector", "#3 - Low Priority"))
+   | eval next_steps = case(
+       host="host1", "Isolate host1, analyze psexec.exe payload, investigate unknown.com domain, check SMB/port 445 connections",
+       host="host2", "Check RDP sessions on port 3389, investigate suspicious.org domain, analyze cmd.exe activity, review user2 privilege escalation",
+       1=1, "Review host activity and network connections"
+   )
+   | table _time, host, user, threat_score, confidence, top_risk_factors, investigation_priority, next_steps
+   | sort -threat_score
 
 - **Explanation**: Joins SHAP values with logs, computes `total_shap` and `confidence`, and provides prioritized investigation steps.
 
