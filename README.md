@@ -1,4 +1,4 @@
-# shap-demo-presentation
+# shap-demo-presentation in splunk
 # SHAP Benefits Demo
 This repository contains the demo script and dashboard XML for the "Executive Summary: SHAP Benefits in Demo" presentation.
 
