@@ -1,0 +1,237 @@
+<form version="1.1" theme="dark">
+  <label>XAI - Lateral Movement Detection: Pre- vs. Post-SHAP - Analyst View</label>
+  <description>Demonstrates how SHAP accelerates investigations and increases confidence for analysts by explaining AI-driven detections.</description>
+  <fieldset submitButton="false">
+    <input type="time" token="time">
+      <label>Time Range</label>
+      <default>
+        <earliest>2025-07-10T15:00:00.000+1000</earliest>
+        <latest>2025-07-10T15:01:00.000+1000</latest>
+      </default>
+    </input>
+    <input type="dropdown" token="host">
+      <label>Select Host</label>
+      <fieldForValue>host</fieldForValue>
+      <search>
+        <query>index=shap_demo sourcetype=cisco:combined_demo | stats count by host</query>
+        <earliest>$time.earliest$</earliest>
+        <latest>$time.latest$</latest>
+      </search>
+      <default>*</default>
+      <choice value="*">All Hosts</choice>
+    </input>
+  </fieldset>
+  <row>
+    <panel>
+      <title>Pre-SHAP: AI Detection Results</title>
+      <table>
+        <search>
+          <query>
+            index=shap_demo sourcetype=cisco:combined_demo host=$host$
+            | eval is_suspicious_process=if(process_name IN ("psexec.exe", "cmd.exe"), 1, 0)
+            | eval is_high_risk_port=if(port IN (445, 3389), 1, 0)
+            | eval is_suspicious_domain=if(domain IN ("unknown.com", "suspicious.org") OR domain="", 1, 0)
+            | eval high_data_transfer=if(bytes_sent > 800 OR bytes_received > 400, 1, 0)
+            | eval high_dns_query_count=if(dns_query_count > 10, 1, 0)
+            | eval threat_score = (is_suspicious_process * 0.3) + (is_high_risk_port * 0.25) + (is_suspicious_domain * 0.25) + (high_data_transfer * 0.15) + (high_dns_query_count * 0.05)
+            | eval alert_status = if(threat_score >= 0.7, "Alert Fired", "No Alert")
+            | table _time, host, user, threat_score, alert_status
+            | sort -threat_score
+          </query>
+          <earliest>$time.earliest$</earliest>
+          <latest>$time.latest$</latest>
+        </search>
+        <option name="refresh.display">progressbar</option>
+        <option name="rowNumbers">true</option>
+      </table>
+    </panel>
+    <panel>
+      <title>Post-SHAP: AI Detection Results with Explainability</title>
+      <table>
+        <search>
+          <query>
+            index=shap_demo sourcetype=cisco:combined_demo host=$host$
+            | eval is_suspicious_process=if(process_name IN ("psexec.exe", "cmd.exe"), 1, 0)
+            | eval is_high_risk_port=if(port IN (445, 3389), 1, 0)
+            | eval is_suspicious_domain=if(domain IN ("unknown.com", "suspicious.org") OR domain="", 1, 0)
+            | eval high_data_transfer=if(bytes_sent > 800 OR bytes_received > 400, 1, 0)
+            | eval high_dns_query_count=if(dns_query_count > 10, 1, 0)
+            | eval original_threat_score = (is_suspicious_process * 0.3) + (is_high_risk_port * 0.25) + (is_suspicious_domain * 0.25) + (high_data_transfer * 0.15) + (high_dns_query_count * 0.05)
+            | eval _time=strptime(_time, "%Y-%m-%dT%H:%M:%S.%N%z")
+            | join type=left _time, host
+                [ | inputlookup shap_values.csv
+                  | eval _time=strptime(_time, "%Y-%m-%dT%H:%M:%S.%N%z")
+                  | fields _time, host, shap_is_suspicious_process, shap_is_high_risk_port, shap_is_suspicious_domain, shap_high_data_transfer, shap_high_dns_query_count, shap_connection_duration_norm, shap_bytes_sent_norm, shap_bytes_received_norm ]
+            | where original_threat_score >= 0.1
+            | eval total_shap = coalesce(shap_is_suspicious_process, 0) + coalesce(shap_is_high_risk_port, 0) + coalesce(shap_is_suspicious_domain, 0) + coalesce(shap_high_data_transfer, 0) + coalesce(shap_high_dns_query_count, 0) + coalesce(shap_connection_duration_norm, 0) + coalesce(shap_bytes_sent_norm, 0) + coalesce(shap_bytes_received_norm, 0)
+            | eval max_shap = max(coalesce(shap_is_suspicious_process, 0), coalesce(shap_is_high_risk_port, 0), coalesce(shap_is_suspicious_domain, 0), coalesce(shap_high_data_transfer, 0), coalesce(shap_high_dns_query_count, 0), coalesce(shap_connection_duration_norm, 0), coalesce(shap_bytes_sent_norm, 0), coalesce(shap_bytes_received_norm, 0))
+            | eval confidence = min(round(max_shap * 100, 0), 100) . "%"
+            | eval top_risk_factors = case(
+                shap_is_suspicious_domain >= 0.4, "Unknown Domain Communication: +" . round(shap_is_suspicious_domain, 2) . " (CRITICAL)",
+                shap_is_suspicious_process >= 0.4, "Suspicious Process Execution: +" . round(shap_is_suspicious_process, 2) . " (SUSPICIOUS)",
+                shap_is_high_risk_port >= 0.3, "High-Risk Port Activity: +" . round(shap_is_high_risk_port, 2) . " (ANOMALOUS)",
+                shap_high_data_transfer >= 0.15, "Elevated Data Transfer: +" . round(shap_high_data_transfer, 2) . " (MALICIOUS)",
+                shap_high_dns_query_count >= 0.15, "Abnormal Query Patterns: +" . round(shap_high_dns_query_count, 2) . " (ELEVATED)",
+                true(), ""
+            )
+            | table _time, host, user, original_threat_score as threat_score, confidence, top_risk_factors
+            | sort -threat_score
+          </query>
+          <earliest>$time.earliest$</earliest>
+          <latest>$time.latest$</latest>
+        </search>
+        <option name="refresh.display">progressbar</option>
+        <option name="rowNumbers">true</option>
+      </table>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Pre-SHAP: Raw Events for Host</title>
+      <table>
+        <search>
+          <query>
+            index=shap_demo sourcetype=cisco:combined_demo host=$host$
+            | table _time, sourcetype, action, dest_ip, domain, process_name, port, dns_query_count
+            | sort -_time
+          </query>
+          <earliest>$time.earliest$</earliest>
+          <latest>$time.latest$</latest>
+        </search>
+        <option name="rowNumbers">true</option>
+      </table>
+    </panel>
+    <panel>
+      <title>Post-SHAP: Top SHAP Contributors for $host$ Alerts</title>
+      <chart>
+        <search>
+          <query>
+            index=shap_demo sourcetype=cisco:combined_demo host=$host$
+            | eval is_suspicious_process=if(process_name IN ("psexec.exe", "cmd.exe"), 1, 0)
+            | eval is_high_risk_port=if(port IN (445, 3389), 1, 0)
+            | eval is_suspicious_domain=if(domain IN ("unknown.com", "suspicious.org") OR domain="", 1, 0)
+            | eval high_data_transfer=if(bytes_sent > 800 OR bytes_received > 400, 1, 0)
+            | eval high_dns_query_count=if(dns_query_count > 10, 1, 0)
+            | eval threat_score = (is_suspicious_process * 0.3) + (is_high_risk_port * 0.25) + (is_suspicious_domain * 0.25) + (high_data_transfer * 0.15) + (high_dns_query_count * 0.05)
+            | eval _time=strptime(_time, "%Y-%m-%dT%H:%M:%S.%N%z")
+            | join type=left _time, host
+                [ | inputlookup shap_values.csv
+                  | eval _time=strptime(_time, "%Y-%m-%dT%H:%M:%S.%N%z")
+                  | fields _time, host, shap_is_suspicious_process, shap_is_high_risk_port, shap_is_suspicious_domain, shap_high_data_transfer, shap_high_dns_query_count, shap_connection_duration_norm, shap_bytes_sent_norm, shap_bytes_received_norm ]
+            | where threat_score >= 0.1
+            | stats count as event_count, avg(shap_is_suspicious_process) as Suspicious_Process_SHAP,
+                    avg(shap_is_high_risk_port) as High_Risk_Port_SHAP,
+                    avg(shap_is_suspicious_domain) as Suspicious_Domain_SHAP,
+                    avg(shap_high_data_transfer) as High_Data_Transfer_SHAP,
+                    avg(shap_high_dns_query_count) as High_DNS_Query_Count_SHAP,
+                    avg(shap_connection_duration_norm) as Connection_Duration_SHAP,
+                    avg(shap_bytes_sent_norm) as Bytes_Sent_SHAP,
+                    avg(shap_bytes_received_norm) as Bytes_Received_SHAP
+            | where event_count > 0
+            | transpose header_field="" column_name="Feature" | sort -col1
+            | rename col1 as "SHAP Value"
+          </query>
+          <earliest>$time.earliest$</earliest>
+          <latest>$time.latest$</latest>
+        </search>
+        <option name="charting.chart">bar</option>
+        <option name="charting.legend.placement">right</option>
+        <option name="charting.axisTitleX.text">Features</option>
+        <option name="charting.axisTitleY.text">Average SHAP Value</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Pre-SHAP: Investigation Notes</title>
+      <html>
+        <h3>Manual Investigation Without SHAP</h3>
+        <p>Analysts must manually review raw logs to identify lateral movement:</p>
+        <ul>
+          <li>Check for suspicious processes (e.g., psexec.exe, cmd.exe).</li>
+          <li>Verify high-risk ports (e.g., 445, 3389).</li>
+          <li>Inspect domains (e.g., unknown.com, suspicious.org).</li>
+          <li>Analyze data transfer (bytes_sent > 800, bytes_received > 400).</li>
+          <li>Review DNS query rates (dns_query_count > 10).</li>
+        </ul>
+        <p><b>Challenges:</b></p>
+        <ul>
+          <li>AI threat score (e.g., 0.85) lacks explanation, forcing manual log review.</li>
+          <li>Time-consuming: Analysts must correlate multiple fields across logs.</li>
+          <li>Low confidence: Unclear which factors drive the alert.</li>
+        </ul>
+        <p><i>Example: For host1, manually check if psexec.exe or port 445 appears in logs, taking 10-15 minutes per event.</i></p>
+      </html>
+    </panel>
+    <panel>
+      <title>Post-SHAP: Raw Events for Host</title>
+      <table>
+        <search>
+          <query>
+            index=shap_demo sourcetype=cisco:combined_demo host=$host$
+            | table _time, sourcetype, action, dest_ip, domain, process_name, port, dns_query_count
+            | sort -_time
+          </query>
+          <earliest>$time.earliest$</earliest>
+          <latest>$time.latest$</latest>
+        </search>
+        <option name="rowNumbers">true</option>
+      </table>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Pre-SHAP: Sample Investigation Search</title>
+      <table>
+        <search>
+          <query>
+            index=shap_demo sourcetype=cisco:combined_demo host=$host$ 
+            | where port IN (445, 3389) OR process_name IN ("psexec.exe", "cmd.exe") OR domain IN ("unknown.com", "suspicious.org") OR bytes_sent > 800 OR bytes_received > 400 OR dns_query_count > 10
+            | table _time, sourcetype, action, dest_ip, domain, process_name, port, dns_query_count
+            | sort -_time
+          </query>
+          <earliest>$time.earliest$</earliest>
+          <latest>$time.latest$</latest>
+        </search>
+        <option name="rowNumbers">true</option>
+      </table>
+    </panel>
+    <panel>
+      <title>Post-SHAP: Investigation Notes</title>
+      <html>
+        <h3>SHAP-Guided Investigation</h3>
+        <p>SHAP explains AI predictions, enabling faster and more confident investigations:</p>
+        <ul>
+          <li>Focus on high SHAP values (e.g., Suspicious_Process_SHAP = 0.93 for host1).</li>
+          <li>Prioritize critical features (e.g., Suspicious_Domain_SHAP = 0.78 for host2).</li>
+          <li>Run targeted searches (e.g., <code>process_name IN ("psexec.exe", "cmd.exe")</code>).</li>
+          <li>Use confidence score (e.g., 92%) to assess alert reliability.</li>
+        </ul>
+        <p><b>Benefits:</b></p>
+        <ul>
+          <li><b>Faster:</b> SHAP highlights key risk factors, reducing investigation time to 2-5 minutes.</li>
+          <li><b>Higher Confidence:</b> Clear explanations (e.g., "Suspicious Process Execution: +0.93") validate alerts.</li>
+          <li><b>Guided Actions:</b> Targeted next steps (e.g., "Isolate host1, analyze psexec.exe payload").</li>
+        </ul>
+        <p><i>Example: For host1 at 2025-07-10 15:00:17, SHAP shows Suspicious_Process_SHAP = 0.93, pointing to psexec.exe, confirmed in 2 minutes.</i></p>
+     
+      </html>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Confidence Score Explanation</title>
+      <html>
+        <h3>Confidence Score Interpretation</h3>
+        <p>The confidence score reflects the strength of the SHAP-based explanation for the alert:</p>
+        <ul>
+          <li><b>0% - 30%:</b> Low confidence; minimal evidence of malicious activity, further investigation recommended.</li>
+          <li><b>31% - 60%:</b> Moderate confidence; some indicators present, requires analyst validation.</li>
+          <li><b>61% - 90%:</b> High confidence; strong evidence of suspicious behavior, actionable with caution.</li>
+          <li><b>91% - 100%:</b> Very high confidence; clear and dominant indicators, immediate action advised.</li>
+        </ul>
+      </html>
+    </panel>
+  </row>
+</form>

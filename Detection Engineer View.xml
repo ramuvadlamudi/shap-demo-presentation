@@ -1,0 +1,229 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 <form version="1.1" theme="dark">\
+  <label>XAI - Lateral Movement Detection: Detection Engineer View (Demo)</label>\
+  <description>Uses SHAP to guide detection engineers in fine-tuning lateral movement detections with sample Cisco logs.</description>\
+  <fieldset submitButton="false">\
+    <input type="time" token="time">\
+      <label>Time Range</label>\
+      <default>\
+        <earliest>-24h@h</earliest>\
+        <latest>now</latest>\
+      </default>\
+    </input>\
+    <input type="dropdown" token="host">\
+      <label>Select Host</label>\
+      <fieldForValue>host</fieldForValue>\
+      <search>\
+        <query>\
+          <![CDATA[index=shap_demo sourcetype=cisco:combined_demo | stats count by host]]>\
+        </query>\
+        <earliest>$time.earliest$</earliest>\
+        <latest>$time.latest$</latest>\
+      </search>\
+      <default>*</default>\
+      <choice value="*">All Hosts</choice>\
+    </input>\
+    <input type="text" token="bytes_sent_threshold">\
+      <label>Bytes Sent Threshold (Default: 800)</label>\
+      <default>800</default>\
+    </input>\
+    <input type="text" token="dns_query_threshold">\
+      <label>DNS Query Count Threshold (Default: 10)</label>\
+      <default>10</default>\
+    </input>\
+  </fieldset>\
+  <row>\
+    <panel>\
+      <title>Feature Contributions (Average SHAP Values)</title>\
+      <chart>\
+        <search>\
+          <query>\
+            <![CDATA[\
+            index=shap_demo sourcetype=cisco:combined_demo host=$host$\
+            | eval is_suspicious_process=if(process_name IN ("psexec.exe", "cmd.exe"), 1, 0)\
+            | eval is_high_risk_port=if(port IN (445, 3389), 1, 0)\
+            | eval is_suspicious_domain=if(domain IN ("unknown.com", "suspicious.org") OR domain="", 1, 0)\
+            | eval high_data_transfer=if(bytes_sent > $bytes_sent_threshold$ OR bytes_received > 400, 1, 0)\
+            | eval high_dns_query_count=if(dns_query_count > $dns_query_threshold$, 1, 0)\
+            | eval threat_score = (is_suspicious_process * 0.3) + (is_high_risk_port * 0.25) + (is_suspicious_domain * 0.25) + (high_data_transfer * 0.15) + (high_dns_query_count * 0.05)\
+            | eval _time=strptime(_time, "%Y-%m-%dT%H:%M:%S.%N%z")\
+            | join type=left _time, host, user\
+                [ | inputlookup shap_values.csv\
+                  | eval _time=strptime(_time, "%Y-%m-%dT%H:%M:%S.%N%z")\
+                  | fields _time, host, user, shap_is_suspicious_process, shap_is_high_risk_port, shap_is_suspicious_domain, shap_high_data_transfer, shap_high_dns_query_count, shap_connection_duration_norm, shap_bytes_sent_norm, shap_bytes_received_norm ]\
+            | where threat_score >= 0.1\
+            | stats avg(shap_is_suspicious_process) as Suspicious_Process_SHAP,\
+                    avg(shap_is_high_risk_port) as High_Risk_Port_SHAP,\
+                    avg(shap_is_suspicious_domain) as Suspicious_Domain_SHAP,\
+                    avg(shap_high_data_transfer) as High_Data_Transfer_SHAP,\
+                    avg(shap_high_dns_query_count) as High_DNS_Query_Count_SHAP,\
+                    avg(shap_connection_duration_norm) as Connection_Duration_SHAP,\
+                    avg(shap_bytes_sent_norm) as Bytes_Sent_SHAP,\
+                    avg(shap_bytes_received_norm) as Bytes_Received_SHAP\
+            | transpose header_field="Feature" column_name="Feature"\
+            | rename column as "SHAP Value"\
+            | sort - "SHAP Value"\
+          ]]>\
+          </query>\
+          <earliest>$time.earliest$</earliest>\
+          <latest>$time.latest$</latest>\
+        </search>\
+        <option name="charting.chart">bar</option>\
+        <option name="charting.legend.placement">none</option>\
+        <option name="charting.axisTitleX.text">Features</option>\
+        <option name="charting.axisTitleY.text">Average SHAP Value</option>\
+        <option name="refresh.display">progressbar</option>\
+      </chart>\
+    </panel>\
+    <panel>\
+      <title>Detection Performance with Current Thresholds</title>\
+      <table>\
+        <search>\
+          <query>\
+            <![CDATA[\
+            index=shap_demo sourcetype=cisco:combined_demo host=$host$\
+            | eval is_suspicious_process=if(process_name IN ("psexec.exe", "cmd.exe"), 1, 0)\
+            | eval is_high_risk_port=if(port IN (445, 3389), 1, 0)\
+            | eval is_suspicious_domain=if(domain IN ("unknown.com", "suspicious.org") OR domain="", 1, 0)\
+            | eval high_data_transfer=if(bytes_sent > $bytes_sent_threshold$ OR bytes_received > 400, 1, 0)\
+            | eval high_dns_query_count=if(dns_query_count > $dns_query_threshold$, 1, 0)\
+            | eval threat_score = (is_suspicious_process * 0.3) + (is_high_risk_port * 0.25) + (is_suspicious_domain * 0.25) + (high_data_transfer * 0.15) + (high_dns_query_count * 0.05)\
+            | eval alert_label=if(threat_score >= 0.7, "Malicious", if(threat_score >= 0.4, "Suspicious", "Normal"))\
+            | stats count by alert_label\
+            | eval Detection_Rate = case(\
+                alert_label="Malicious", "High Risk: " . count,\
+                alert_label="Suspicious", "Moderate Risk: " . count,\
+                alert_label="Normal", "Low Risk: " . count)\
+            | table Detection_Rate, count\
+          ]]>\
+          </query>\
+          <earliest>$time.earliest$</earliest>\
+          <latest>$time.latest$</latest>\
+        </search>\
+        <option name="refresh.display">progressbar</option>\
+        <option name="rowNumbers">true</option>\
+      </table>\
+    </panel>\
+  </row>\
+  <row>\
+    <panel>\
+      <title>Feature Distributions (Raw Values)</title>\
+      <chart>\
+        <search>\
+          <query>\
+            <![CDATA[\
+            index=shap_demo sourcetype=cisco:combined_demo host=$host$\
+            | eval bytes_sent=if(bytes_sent > 0, bytes_sent, null())\
+            | eval bytes_received=if(bytes_received > 0, bytes_received, null())\
+            | eval dns_query_count=if(dns_query_count > 0, dns_query_count, null())\
+            | eval connection_duration=if(connection_duration > 0, connection_duration, null())\
+            | stats avg(bytes_sent) as Avg_Bytes_Sent,\
+                    avg(bytes_received) as Avg_Bytes_Received,\
+                    avg(dns_query_count) as Avg_DNS_Query_Count,\
+                    avg(connection_duration) as Avg_Connection_Duration\
+            | transpose header_field="Feature" column_name="Feature"\
+            | rename column as "Average Value"\
+          ]]>\
+          </query>\
+          <earliest>$time.earliest$</earliest>\
+          <latest>$time.latest$</latest>\
+        </search>\
+        <option name="charting.chart">column</option>\
+        <option name="charting.legend.placement">none</option>\
+        <option name="charting.axisTitleX.text">Features</option>\
+        <option name="charting.axisTitleY.text">Average Value</option>\
+        <option name="refresh.display">progressbar</option>\
+      </chart>\
+    </panel>\
+    <panel>\
+      <title>Potential False Positives (High Threat Score, Low SHAP Confidence)</title>\
+      <table>\
+        <search>\
+          <query>index=shap_demo sourcetype=cisco:combined_demo host=$host$\
+            | eval is_suspicious_process=if(process_name IN ("psexec.exe", "cmd.exe"), 1, 0)\
+            | eval is_high_risk_port=if(port IN (445, 3389), 1, 0)\
+            | eval is_suspicious_domain=if(domain IN ("unknown.com", "suspicious.org") OR domain="", 1, 0)\
+            | eval high_data_transfer=if(bytes_sent &gt; $bytes_sent_threshold$ OR bytes_received &gt; 400, 1, 0)\
+            | eval high_dns_query_count=if(dns_query_count &gt; $dns_query_threshold$, 1, 0)\
+            | eval threat_score = (is_suspicious_process * 0.3) + (is_high_risk_port * 0.25) + (is_suspicious_domain * 0.25) + (high_data_transfer * 0.15) + (high_dns_query_count * 0.05)\
+            | eval _time=strptime(_time, "%Y-%m-%dT%H:%M:%S.%N%z")\
+            | join type=left _time, host, user\
+                [ | inputlookup shap_values.csv\
+                  | eval _time=strptime(_time, "%Y-%m-%dT%H:%M:%S.%N%z")\
+                  | fields _time, host, user, shap_is_suspicious_process, shap_is_high_risk_port, shap_is_suspicious_domain, shap_high_data_transfer, shap_high_dns_query_count, shap_connection_duration_norm, shap_bytes_sent_norm, shap_bytes_received_norm ]\
+            | eval total_shap = coalesce(shap_is_suspicious_process, 0) + coalesce(shap_is_high_risk_port, 0) + coalesce(shap_is_suspicious_domain, 0) + coalesce(shap_high_data_transfer, 0) + coalesce(shap_high_dns_query_count, 0) + coalesce(shap_connection_duration_norm, 0) + coalesce(shap_bytes_sent_norm, 0) + coalesce(shap_bytes_received_norm, 0)\
+            | where threat_score &gt;= 0.1 AND total_shap &lt; 1.0\
+            | eval confidence = min(round(total_shap * 100, 0), 100) . "%"\
+            | table _time, host, user, threat_score, confidence, shap_is_suspicious_process, shap_is_high_risk_port, shap_is_suspicious_domain, shap_high_data_transfer, shap_high_dns_query_count\
+            | sort -threat_score</query>\
+          <earliest>$time.earliest$</earliest>\
+          <latest>$time.latest$</latest>\
+        </search>\
+        <option name="refresh.display">progressbar</option>\
+        <option name="rowNumbers">true</option>\
+      </table>\
+    </panel>\
+  </row>\
+  <row>\
+    <panel>\
+      <title>Tuning Recommendations</title>\
+      <html>\
+        <h3>SHAP-Based Detection Tuning</h3>\
+        <p>Use SHAP values to optimize detection logic:</p>\
+        <ul>\
+          <li>\
+            <b>High SHAP Features:</b> Increase weights for features with high average SHAP values (e.g., Suspicious_Process_SHAP &gt; 0.5). Current weights: process=0.3, port=0.25, domain=0.25, data_transfer=0.15, dns_query=0.05.</li>\
+          <li>\
+            <b>Low SHAP Features:</b> Reduce weights or adjust thresholds for low-impact features (e.g., High_Data_Transfer_SHAP &lt; 0.1). Current thresholds: bytes_sent &gt; $bytes_sent_threshold$, dns_query_count &gt; $dns_query_threshold$.</li>\
+          <li>\
+            <b>False Positives:</b> Events with high threat scores (&gt;0.6) but low SHAP confidence (&lt;40%) may indicate over-weighted features. Review table above.</li>\
+          <li>\
+            <b>Feature Variability:</b> Check feature distributions. Low-variance features (e.g., dns_query_count) may need adjusted thresholds or removal.</li>\
+        </ul>\
+        <p>\
+          <b>Actionable Steps:</b>\
+        </p>\
+        <ul>\
+          <li>If Suspicious_Domain_SHAP is high, add more suspicious domains to the list (e.g., "malicious.net").</li>\
+          <li>If High_Data_Transfer_SHAP is low, increase bytes_sent threshold to $bytes_sent_threshold$ + 200.</li>\
+          <li>Run test searches with adjusted weights (e.g., <code>| eval threat_score = (is_suspicious_process * 0.4) + (is_suspicious_domain * 0.3)</code>) to evaluate detection rates.</li>\
+        </ul>\
+      </html>\
+    </panel>\
+    <panel>\
+      <title>Test Adjusted Thresholds</title>\
+      <table>\
+        <search>\
+          <query>\
+            <![CDATA[\
+            index=shap_demo sourcetype=cisco:combined_demo host=$host$\
+            | eval is_suspicious_process=if(process_name IN ("psexec.exe", "cmd.exe"), 1, 0)\
+            | eval is_high_risk_port=if(port IN (445, 3389), 1, 0)\
+            | eval is_suspicious_domain=if(domain IN ("unknown.com", "suspicious.org") OR domain="", 1, 0)\
+            | eval high_data_transfer=if(bytes_sent > ($bytes_sent_threshold$ + 200) OR bytes_received > 400, 1, 0)\
+            | eval high_dns_query_count=if(dns_query_count > ($dns_query_threshold$ + 5), 1, 0)\
+            | eval adjusted_threat_score = (is_suspicious_process * 0.4) + (is_high_risk_port * 0.2) + (is_suspicious_domain * 0.3) + (high_data_transfer * 0.1) + (high_dns_query_count * 0.05)\
+            | eval alert_label=if(adjusted_threat_score >= 0.7, "Malicious", if(adjusted_threat_score >= 0.4, "Suspicious", "Normal"))\
+            | stats count by alert_label\
+            | eval Detection_Rate = case(\
+                alert_label="Malicious", "High Risk: " . count,\
+                alert_label="Suspicious", "Moderate Risk: " . count,\
+                alert_label="Normal", "Low Risk: " . count)\
+            | table Detection_Rate, count\
+          ]]>\
+          </query>\
+          <earliest>$time.earliest$</earliest>\
+          <latest>$time.latest$</latest>\
+        </search>\
+        <option name="refresh.display">progressbar</option>\
+        <option name="rowNumbers">true</option>\
+      </table>\
+    </panel>\
+  </row>\
+</form>}

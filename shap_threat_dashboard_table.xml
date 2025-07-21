@@ -1,0 +1,124 @@
+<form version="1.1" theme="light">
+  <label>XAI - SHAP Threat Detection Dashboard</label>
+  <description>Displays top threats with SHAP analysis, confidence, and response recommendations using a table (20-event dataset).</description>
+  <fieldset submitButton="false">
+    <input type="time" token="time">
+      <label>Time Range</label>
+      <default>
+        <earliest>-24h@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="dropdown" token="host">
+      <label>Select Host</label>
+      <fieldForValue>host</fieldForValue>
+      <search>
+        <query><![CDATA[index=shap_demo sourcetype=cisco:combined_demo | stats count by host]]></query>
+        <earliest>$time.earliest$</earliest>
+        <latest>$time.latest$</latest>
+      </search>
+      <default>*</default>
+      <choice value="*">All Hosts</choice>
+    </input>
+  </fieldset>
+  <row>
+    <panel>
+      <title>Top Threats with SHAP Analysis</title>
+      <table>
+        <search>
+          <query><![CDATA[
+            index=shap_demo sourcetype=cisco:combined_demo host=$host$
+            | eval is_suspicious_process=if(process_name IN ("psexec.exe", "cmd.exe"), 1, 0)
+            | eval is_high_risk_port=if(port IN (445, 3389), 1, 0)
+            | eval is_suspicious_domain=if(domain IN ("unknown.com", "suspicious.org") OR domain="", 1, 0)
+            | eval high_data_transfer=if(bytes_sent > 400 OR bytes_received > 200, 1, 0)
+            | eval high_dns_query_count=if(dns_query_count > 5, 1, 0)
+            | eval threat_score = (is_suspicious_process * 0.3) + (is_high_risk_port * 0.25) + (is_suspicious_domain * 0.25) + (high_data_transfer * 0.15) + (high_dns_query_count * 0.05)
+            | eval _time=strptime(_time, "%Y-%m-%dT%H:%M:%S.%N%z")
+            | join type=left _time, host, user [ | inputlookup shap_values.csv
+              | eval _time=strptime(_time, "%Y-%m-%dT%H:%M:%S.%N%z")
+              | fields _time, host, user, shap_is_suspicious_process, shap_is_high_risk_port, shap_is_suspicious_domain, shap_high_data_transfer, shap_high_dns_query_count ]
+            | eval total_shap = coalesce(shap_is_suspicious_process, 0) + coalesce(shap_is_high_risk_port, 0) + coalesce(shap_is_suspicious_domain, 0) + coalesce(shap_high_data_transfer, 0) + coalesce(shap_high_dns_query_count, 0)
+            | eval confidence = min(round(total_shap * 100, 0), 100)
+            | eval confidence_context = case(confidence >= 90, " (Strong multi-source correlation)",
+                                           confidence >= 80, " (Multi-vector attack pattern)",
+                                           1=1, " (Limited feature correlation - further investigation recommended)")
+            | eval risk_factors = case(
+                shap_is_suspicious_process > 0, "├─ Suspicious Process Execution\n+ " . round(shap_is_suspicious_process, 2) . "\n🔺 SUSPICIOUS",
+                1=1, ""
+              ) . case(
+                shap_is_high_risk_port > 0, "├─ High-Risk Port Activity\n+ " . round(shap_is_high_risk_port, 2) . "\n🌙 ANOMALOUS",
+                1=1, ""
+              ) . case(
+                shap_is_suspicious_domain > 0, "├─ Unknown Domain Communication\n+ " . round(shap_is_suspicious_domain, 2) . "\n⚡ CRITICAL",
+                1=1, ""
+              ) . case(
+                shap_high_data_transfer > 0, "├─ Elevated Data Transfer\n+ " . round(shap_high_data_transfer, 2) . "\n🌍 MALICIOUS",
+                1=1, ""
+              ) . case(
+                shap_high_dns_query_count > 0, "└─ Abnormal Query Patterns\n+ " . round(shap_high_dns_query_count, 2) . "\n✓ ELEVATED",
+                1=1, ""
+              )
+            | eval priority = case(
+                threat_score >= 0.9, "#1 - Critical Lateral Movement",
+                threat_score >= 0.8, "#2 - RDP Compromise Vector",
+                1=1, "N/A"
+              )
+            | eval next_steps = case(
+                host="host1" AND threat_score >= 0.9, "Isolate host1, analyze psexec.exe payload, investigate unknown.com domain, check SMB/port 445 connections",
+                host="host2" AND threat_score >= 0.8, "Check RDP sessions on port 3389, investigate suspicious.org domain, analyze cmd.exe activity, review user2 privilege escalation",
+                1=1, "Review event details"
+              )
+            | eval threat_label = case(
+                threat_score >= 0.9, "IMMEDIATE ACTION REQUIRED",
+                threat_score >= 0.8, "HIGH PRIORITY RESPONSE",
+                1=1, "MONITOR"
+              )
+            | where threat_score >= 0.5
+            | table _time, host, user, threat_score, threat_label, risk_factors, confidence, confidence_context, priority, next_steps
+            | rename _time as "Time", host as "Host", user as "User", threat_score as "Threat Score", threat_label as "Action Required", risk_factors as "Top Risk Factors (SHAP Analysis)", confidence as "Confidence (%)", confidence_context as "Confidence Context", priority as "Investigation Priority", next_steps as "Next Steps"
+          ]]></query>
+          <earliest>$time.earliest$</earliest>
+          <latest>$time.latest$</latest>
+        </search>
+        <option name="wrap">true</option>
+        <option name="rowNumbers">true</option>
+        <format type="color" field="Threat Score">
+          <colorPalette type="shared"></colorPalette>
+          <scale type="threshold">0.9,0.8</scale>
+          <color>#FF0000, #FFA500, #FFFF00</color>
+        </format>
+        <format type="color" field="Confidence (%)">
+          <colorPalette type="shared"></colorPalette>
+          <scale type="threshold">90,80</scale>
+          <color>#00FF00, #FFFF00, #FF0000</color>
+        </format>
+      </table>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>SHAP Analysis Comparison</title>
+      <html>
+        <div style="font-family: Arial, sans-serif; padding: 10px;">
+          <h3>📊 SHAP Analysis Comparison</h3>
+          <h4>🔍 Key Patterns Detected:</h4>
+          <ul>
+            <li>Both hosts showing lateral movement indicators</li>
+            <li>host1: Primary vector via psexec.exe + SMB (port 445)</li>
+            <li>host2: Secondary vector via RDP (port 3389) + command execution</li>
+            <li>Coordinated attack pattern across network segments</li>
+            <li>Unknown domain communications suggest C2 activity</li>
+          </ul>
+          <h4>⚡ Coordinated Response:</h4>
+          <ul>
+            <li>Implement network segmentation</li>
+            <li>Block unknown domains</li>
+            <li>Audit user1 and user2 accounts</li>
+            <li>Check for additional compromised hosts</li>
+          </ul>
+        </div>
+      </html>
+    </panel>
+  </row>
+</form>

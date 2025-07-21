@@ -1,0 +1,214 @@
+<form version="1.1" theme="dark">
+  <label>Lateral Movement Detection with SHAP - Splunk .conf25 Overview</label>
+  <description>Provides an overview of lateral movement detection using SHAP for Splunk .conf25 demo.</description>
+  <fieldset submitButton="false">
+    <input type="time" token="time">
+      <label>Time Range</label>
+      <default>
+        <earliest>-24h@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="dropdown" token="host">
+      <label>Select Host</label>
+      <fieldForValue>host</fieldForValue>
+      <search>
+        <query>index=shap_demo sourcetype=cisco:combined_demo | stats count by host</query>
+        <earliest>$time.earliest$</earliest>
+        <latest>$time.latest$</latest>
+      </search>
+      <default>*</default>
+      <choice value="*">All Hosts</choice>
+    </input>
+  </fieldset>
+  <row>
+    <panel>
+      <title>Threat Score by Host</title>
+      <chart>
+        <search>
+          <query>
+            index=shap_demo sourcetype=cisco:combined_demo host=$host$
+            | eval is_suspicious_process=if(process_name IN ("psexec.exe", "cmd.exe"), 1, 0)
+            | eval is_high_risk_port=if(port IN (445, 3389), 1, 0)
+            | eval is_suspicious_domain=if(domain IN ("unknown.com", "suspicious.org") OR domain="", 1, 0)
+            | eval high_data_transfer=if(bytes_sent > 800 OR bytes_received > 400, 1, 0)
+            | eval high_dns_query_count=if(dns_query_count > 10, 1, 0)
+            | eval threat_score = (is_suspicious_process * 0.3) + (is_high_risk_port * 0.25) + (is_suspicious_domain * 0.25) + (high_data_transfer * 0.15) + (high_dns_query_count * 0.05)
+            | where threat_score &gt;= 0.1
+            | stats max(threat_score) as max_threat_score by host
+            | sort -max_threat_score
+          </query>
+          <earliest>$time.earliest$</earliest>
+          <latest>$time.latest$</latest>
+        </search>
+        <option name="charting.chart">bar</option>
+        <option name="charting.legend.placement">right</option>
+        <option name="charting.axisTitleX.text">Host</option>
+        <option name="charting.axisTitleY.text">Maximum Threat Score</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>SHAP Contributions for High-Risk Events</title>
+      <chart>
+        <search>
+          <query>
+            index=shap_demo sourcetype=cisco:combined_demo host=$host$
+            | eval is_suspicious_process=if(process_name IN ("psexec.exe", "cmd.exe"), 1, 0)
+            | eval is_high_risk_port=if(port IN (445, 3389), 1, 0)
+            | eval is_suspicious_domain=if(domain IN ("unknown.com", "suspicious.org") OR domain="", 1, 0)
+            | eval high_data_transfer=if(bytes_sent > 800 OR bytes_received > 400, 1, 0)
+            | eval high_dns_query_count=if(dns_query_count > 10, 1, 0)
+            | eval threat_score = (is_suspicious_process * 0.3) + (is_high_risk_port * 0.25) + (is_suspicious_domain * 0.25) + (high_data_transfer * 0.15) + (high_dns_query_count * 0.05)
+            | eval _time=strptime(_time, "%Y-%m-%dT%H:%M:%S.%N%z")
+            | join type=left _time, host, user
+                [ | inputlookup shap_values.csv
+                  | eval _time=strptime(_time, "%Y-%m-%dT%H:%M:%S.%N%z")
+                  | fields _time, host, user, shap_is_suspicious_process, shap_is_high_risk_port, shap_is_suspicious_domain, shap_high_data_transfer, shap_high_dns_query_count, shap_connection_duration_norm, shap_bytes_sent_norm, shap_bytes_received_norm ]
+            | where threat_score &gt;= 0.1
+            | eval shap_suspicious_process = if(coalesce(shap_is_suspicious_process, 0) &gt; 1, 1, if(coalesce(shap_is_suspicious_process, 0) &lt; -1, -1, coalesce(shap_is_suspicious_process, 0)))
+            | eval shap_high_risk_port = if(coalesce(shap_is_high_risk_port, 0) &gt; 1, 1, if(coalesce(shap_is_high_risk_port, 0) &lt; -1, -1, coalesce(shap_is_high_risk_port, 0)))
+            | eval shap_suspicious_domain = if(coalesce(shap_is_suspicious_domain, 0) &gt; 1, 1, if(coalesce(shap_is_suspicious_domain, 0) &lt; -1, -1, coalesce(shap_is_suspicious_domain, 0)))
+            | eval shap_high_data_transfer = if(coalesce(shap_high_data_transfer, 0) &gt; 1, 1, if(coalesce(shap_high_data_transfer, 0) &lt; -1, -1, coalesce(shap_high_data_transfer, 0)))
+            | eval shap_high_dns_query_count = if(coalesce(shap_high_dns_query_count, 0) &gt; 1, 1, if(coalesce(shap_high_dns_query_count, 0) &lt; -1, -1, coalesce(shap_high_dns_query_count, 0)))
+            | eval shap_connection_duration = if(coalesce(shap_connection_duration_norm, 0) &gt; 1, 1, if(coalesce(shap_connection_duration_norm, 0) &lt; -1, -1, coalesce(shap_connection_duration_norm, 0)))
+            | eval shap_bytes_sent = if(coalesce(shap_bytes_sent_norm, 0) &gt; 1, 1, if(coalesce(shap_bytes_sent_norm, 0) &lt; -1, -1, coalesce(shap_bytes_sent_norm, 0)))
+            | eval shap_bytes_received = if(coalesce(shap_bytes_received_norm, 0) &gt; 1, 1, if(coalesce(shap_bytes_received_norm, 0) &lt; -1, -1, coalesce(shap_bytes_received_norm, 0)))
+            | stats avg(shap_suspicious_process) as shap_suspicious_process,
+                    avg(shap_high_risk_port) as shap_high_risk_port,
+                    avg(shap_suspicious_domain) as shap_suspicious_domain,
+                    avg(shap_high_data_transfer) as shap_high_data_transfer,
+                    avg(shap_high_dns_query_count) as shap_high_dns_query_count,
+                    avg(shap_connection_duration) as shap_connection_duration,
+                    avg(shap_bytes_sent) as shap_bytes_sent,
+                    avg(shap_bytes_received) as shap_bytes_received
+                    by host
+            | table host, shap_suspicious_process, shap_high_risk_port, shap_suspicious_domain, shap_high_data_transfer, shap_high_dns_query_count, shap_connection_duration, shap_bytes_sent, shap_bytes_received
+          </query>
+          <earliest>$time.earliest$</earliest>
+          <latest>$time.latest$</latest>
+        </search>
+        <option name="charting.chart">bar</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.legend.placement">right</option>
+        <option name="charting.axisTitleX.text">Host</option>
+        <option name="charting.axisTitleY.text">Average SHAP Value Contribution</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Malicious Event Timeline</title>
+      <chart>
+        <search>
+          <query>
+            index=shap_demo sourcetype=cisco:combined_demo host=$host$
+            | eval is_suspicious_process=if(process_name IN ("psexec.exe", "cmd.exe"), 1, 0)
+            | eval is_high_risk_port=if(port IN (445, 3389), 1, 0)
+            | eval is_suspicious_domain=if(domain IN ("unknown.com", "suspicious.org") OR domain="", 1, 0)
+            | eval high_data_transfer=if(bytes_sent > 800 OR bytes_received > 400, 1, 0)
+            | eval high_dns_query_count=if(dns_query_count > 10, 1, 0)
+            | eval threat_score = (is_suspicious_process * 0.3) + (is_high_risk_port * 0.25) + (is_suspicious_domain * 0.25) + (high_data_transfer * 0.15) + (high_dns_query_count * 0.05)
+            | where threat_score &gt;= 0.1
+            | timechart count by host
+          </query>
+          <earliest>$time.earliest$</earliest>
+          <latest>$time.latest$</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.chart.showDataLabels">all</option>
+        <option name="charting.legend.placement">right</option>
+        <option name="charting.axisTitleX.text">Time</option>
+        <option name="charting.axisTitleY.text">Event Count</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Investigation Priorities</title>
+      <table>
+        <search>
+          <query>
+            index=shap_demo sourcetype=cisco:combined_demo host=$host$
+            | eval is_suspicious_process=if(process_name IN ("psexec.exe", "cmd.exe"), 1, 0)
+            | eval is_high_risk_port=if(port IN (445, 3389), 1, 0)
+            | eval is_suspicious_domain=if(domain IN ("unknown.com", "suspicious.org") OR domain="", 1, 0)
+            | eval high_data_transfer=if(bytes_sent > 800 OR bytes_received > 400, 1, 0)
+            | eval high_dns_query_count=if(dns_query_count > 10, 1, 0)
+            | eval threat_score = (is_suspicious_process * 0.3) + (is_high_risk_port * 0.25) + (is_suspicious_domain * 0.25) + (high_data_transfer * 0.15) + (high_dns_query_count * 0.05)
+            | eval _time=strptime(_time, "%Y-%m-%dT%H:%M:%S.%N%z")
+            | join type=left _time, host, user
+                [ | inputlookup shap_values.csv
+                  | eval _time=strptime(_time, "%Y-%m-%dT%H:%M:%S.%N%z")
+                  | fields _time, host, user, shap_is_suspicious_process, shap_is_high_risk_port, shap_is_suspicious_domain, shap_high_data_transfer, shap_high_dns_query_count, shap_connection_duration_norm, shap_bytes_sent_norm, shap_bytes_received_norm ]
+            | where threat_score &gt;= 0.1
+            | eval total_shap = coalesce(shap_is_suspicious_process, 0) + coalesce(shap_is_high_risk_port, 0) + coalesce(shap_is_suspicious_domain, 0) + coalesce(shap_high_data_transfer, 0) + coalesce(shap_high_dns_query_count, 0) + coalesce(shap_connection_duration_norm, 0) + coalesce(shap_bytes_sent_norm, 0) + coalesce(shap_bytes_received_norm, 0)
+            | eval max_shap = max(coalesce(shap_is_suspicious_process, 0), coalesce(shap_is_high_risk_port, 0), coalesce(shap_is_suspicious_domain, 0), coalesce(shap_high_data_transfer, 0), coalesce(shap_high_dns_query_count, 0), coalesce(shap_connection_duration_norm, 0), coalesce(shap_bytes_sent_norm, 0), coalesce(shap_bytes_received_norm, 0))
+            | eval top_risk_factors = case(
+                shap_is_suspicious_domain &gt;= 0.5, "Unknown Domain Communication: +" . round(shap_is_suspicious_domain, 2) . " (CRITICAL)",
+                shap_is_suspicious_process &gt;= 0.5, "Suspicious Process Execution: +" . round(shap_is_suspicious_process, 2) . " (SUSPICIOUS)",
+                shap_is_high_risk_port &gt;= 0.4, "High-Risk Port Activity: +" . round(shap_is_high_risk_port, 2) . " (ANOMALOUS)",
+                shap_high_data_transfer &gt;= 0.2, "Elevated Data Transfer: +" . round(shap_high_data_transfer, 2) . " (MALICIOUS)",
+                shap_high_dns_query_count &gt;= 0.2, "Abnormal Query Patterns: +" . round(shap_high_dns_query_count, 2) . " (ELEVATED)",
+                true(), ""
+            )
+            | eval investigation_priority = case(
+                threat_score &gt;= 0.85, "#1 - Critical Lateral Movement",
+                threat_score &gt;= 0.7, "#2 - RDP Compromise Vector",
+                true(), "#3 - Low Priority"
+            )
+            | eval next_steps = case(
+                host="host1" AND is_suspicious_process=1, "Isolate host1, analyze psexec.exe payload, investigate unknown.com domain, check SMB/port 445 connections",
+                host="host2" AND is_high_risk_port=1, "Check RDP sessions on port 3389, investigate suspicious.org domain, analyze cmd.exe activity, review user2 privilege escalation",
+                true(), "Review host activity and network connections"
+            )
+            | table _time, host, user, threat_score, top_risk_factors, investigation_priority, next_steps
+            | sort -threat_score
+          </query>
+          <earliest>$time.earliest$</earliest>
+          <latest>$time.latest$</latest>
+        </search>
+        <option name="count">10</option>
+        <option name="dataOverlayMode">none</option>
+        <option name="drilldown">none</option>
+        <option name="refresh.display">progressbar</option>
+      </table>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Raw Events for Debugging</title>
+      <table>
+        <search>
+          <query>
+            index=shap_demo sourcetype=cisco:combined_demo host=$host$
+            | table _time, host, process_name, port, domain, bytes_sent, bytes_received, dns_query_count
+          </query>
+          <earliest>$time.earliest$</earliest>
+          <latest>$time.latest$</latest>
+        </search>
+        <option name="rowNumbers">true</option>
+        <option name="refresh.display">progressbar</option>
+      </table>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Threat Score Explanation</title>
+      <html>
+        <h3>Threat Score Interpretation</h3>
+        <p>The threat score reflects the maximum level of potential malicious activity detected for each host, based on weighted risk indicators:</p>
+        <ul>
+          <li><b>0.0 - 0.3:</b> Low threat; minimal evidence of malicious behavior, likely normal activity, routine monitoring sufficient.</li>
+          <li><b>0.31 - 0.6:</b> Moderate threat; some indicators of suspicious activity present, warrants periodic review or initial investigation.</li>
+          <li><b>0.61 - 0.9:</b> High threat; significant evidence of potential compromise or lateral movement, requires prompt investigation and mitigation.</li>
+          <li><b>0.91 - 1.0:</b> Very high threat; strong and dominant indicators of malicious activity, immediate isolation and response recommended.</li>
+        </ul>
+      </html>
+    </panel>
+  </row>
+</form>
